@@ -59,38 +59,117 @@ function onOpen() {
 function restructureData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sourceSheet = ss.getActiveSheet();
-  const targetSheetName = sourceSheet.getName() + " - NH Checks";
-  let targetSheet = ss.getSheetByName(targetSheetName);
-  
-  if (!targetSheet) {
-    targetSheet = ss.insertSheet(targetSheetName);
+  const checkResult = checkSheetDataStructure(sourceSheet);
+
+  if (checkResult.isValid) {
+    // Log the successful check
+    Logger.log(checkResult.message);
+    const targetSheetName = sourceSheet.getName() + " - NH Checks";
+    let targetSheet = ss.getSheetByName(targetSheetName);
+    
+    if (!targetSheet) {
+        targetSheet = ss.insertSheet(targetSheetName);
+    } else {
+        targetSheet.clear();
+    }
+
+    // Set headers for long format
+    targetSheet.getRange("A1:C1")
+        .setValues([["Block", "Treatment", "Result"]]);
+
+    // Get all data from source sheet
+    const [header, ...data] = sourceSheet.getDataRange().getValues();
+
+    // Extract treatment names (assumes first column is "Block")
+    const treatments = header.slice(1);
+
+    // Restructure data
+    const output = data.flatMap(row => {
+        const block = row[0];
+        return treatments.map((treatment, idx) => [
+            block,
+            treatment,
+            row[idx + 1] // +1 to skip Block column
+        ]);
+    });
+
+    // Write to target sheet
+    targetSheet.getRange(2, 1, output.length, 3).setValues(output);
+    targetSheet.autoResizeColumns(1, 3);
+    // Log the successful restructuring
+    Browser.msgBox("Success!", "Data restructured successfully. Next, run 'ANOVA Assumption Check > Prepare Data > Calculate All Metrics'.", Browser.Buttons.OK);
+    Logger.log("Data restructured successfully.");
   } else {
-    targetSheet.clear();
+    Browser.msgBox("Data Validation Result", checkResult.message, Browser.Buttons.OK);
+    Logger.log(checkResult.message);
+  }
+}
+
+/**
+ * Checks if data in a Google Sheet is available, structured correctly,
+ * and has no missing values.
+ *
+ * The function expects the first column to contain "Block" names (strings),
+ * and all subsequent columns to contain numeric values for treatments.
+ * It also checks for the absence of empty cells.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet The sheet to check.
+ * @return {object} An object with properties:
+ * - isValid: boolean indicating if the data meets all criteria.
+ * - message: a string explaining the result, especially if invalid.
+ */
+function checkSheetDataStructure(sheet) {
+  if (!sheet) {
+    return { isValid: false, message: "No sheet provided." };
   }
 
-  // Set headers for long format
-  targetSheet.getRange("A1:C1")
-    .setValues([["Block", "Treatment", "Result"]]);
+  const range = sheet.getDataRange();
+  const values = range.getValues();
 
-  // Get all data from source sheet
-  const [header, ...data] = sourceSheet.getDataRange().getValues();
+  if (values.length === 0) {
+    return { isValid: false, message: "Sheet is empty. No data found." };
+  }
 
-  // Extract treatment names (assumes first column is "Block")
-  const treatments = header.slice(1);
+  // Check header row (at least two columns: Block and one treatment)
+  if (values[0].length < 2) {
+    return { isValid: false, message: "Insufficient columns. Expected at least 'Block' and one treatment column." };
+  }
 
-  // Restructure data
-  const output = data.flatMap(row => {
-    const block = row[0];
-    return treatments.map((treatment, idx) => [
-      block,
-      treatment,
-      row[idx + 1] // +1 to skip Block column
-    ]);
-  });
+  // Iterate through rows and columns to check structure and missing values
+  for (let r = 0; r < values.length; r++) {
+    for (let c = 0; c < values[r].length; c++) {
+      const cellValue = values[r][c];
 
-  // Write to target sheet
-  targetSheet.getRange(2, 1, output.length, 3).setValues(output);
-  targetSheet.autoResizeColumns(1, 3);
+      // Check for missing values (empty string or null)
+      if (cellValue === "" || cellValue === null) {
+        return { isValid: false, message: `Missing value found at row ${r + 1}, column ${c + 1}.` };
+      }
+
+      if (r === 0) {
+        if (typeof cellValue !== 'string' || cellValue.trim() === '') {
+            return { isValid: false, message: 'Invalid value at row 1. Expected non-empty string.' };
+        }
+      } else {
+        // Check for empty cells in the first column (Block names)
+        if (c === 0) {
+            if (typeof cellValue !== 'string' || cellValue.trim() === '') {
+                return { isValid: false, message: `Invalid value in Block column at row ${r + 1}. Expected non-empty string.` };
+            }
+        } else {
+          // Check for numeric values in treatment columns
+          if (typeof cellValue !== 'number') {
+            // Attempt to convert to number if it's a string that looks like a number
+            const numericValue = parseFloat(cellValue);
+            if (isNaN(numericValue)) {
+              return { isValid: false, message: `Invalid non-numeric value found at row ${r + 1}, column ${c + 1}. Expected a number.` };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { isValid: true, message: "Data structure is valid and no missing values found." };
 }
 
 /**
@@ -119,8 +198,8 @@ function prepareDataForChecks() {
             computeZScores(sheet);
             formatAssumptionCheckSheet(sheet);
             // Log the successful data preparation
-            Logger.log('Data prepared successfully for checks.');
-            ui.alert('Success!', 'Data is ready for assumption checks.', ui.ButtonSet.OK);
+            Logger.log("Data prepared successfully for checks.");
+            ui.alert("Success!", "Data is ready for assumption checks. Next, run 'ANOVA Assumption Check > Generate Charts' to check normal distribution and homogeneity of variances.", ui.ButtonSet.OK);
         } catch (error) {
             Logger.log("Error in prepareDataForChecks: ", error);
             ui.alert('Error', `Failed to prepare data for checks: ${error.message}. Please check the console for details.`, ui.ButtonSet.OK);
@@ -485,159 +564,167 @@ function createResidualsVsFitted(sheet) {
  * 
  */
 function generateANOVA() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const currentSheet = ss.getActiveSheet();
-  const rawDataSheetName = getRawDataSheetNameFromCurrent(currentSheet);
-  const targetSheetName = rawDataSheetName + " - ANOVA";
-  const nhSheetName = rawDataSheetName + " - NH Checks";
-  
-  const nhSheet = ss.getSheetByName(nhSheetName);
-  if (!nhSheet) throw new Error("Run 'ANOVA Assumptions Check' first");
-  
-  // Create or clear ANOVA sheet
-  let anovaSheet = ss.getSheetByName(targetSheetName);
-  if (!anovaSheet) anovaSheet = ss.insertSheet(targetSheetName);
-  else anovaSheet.clear();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const currentSheet = ss.getActiveSheet();
+    const rawDataSheetName = getRawDataSheetNameFromCurrent(currentSheet);
+    const targetSheetName = rawDataSheetName + " - ANOVA";
+    const nhSheetName = rawDataSheetName + " - NH Checks";
 
-  // Get raw data and design parameters
-  const rawData = nhSheet.getRange("A2:C" + nhSheet.getLastRow()).getValues();
-  const blocks = [...new Set(rawData.map(row => row[0]))];
-  const treatments = [...new Set(rawData.map(row => row[1]))];
-  const b = blocks.length, t = treatments.length, r = rawData.filter(row => 
-    row[0] === blocks[0] && row[1] === treatments[0]).length;
+    const nhSheet = ss.getSheetByName(nhSheetName);
+    if (!nhSheet) {
+        Browser.msgBox("Error", "Run 'ANOVA Assumptions Check' first", Browser.Buttons.OK);
+        Logger.log("ANOVA generation failed: No NH Checks sheet found.");
+        return;
+    }
 
-  // Add titles
-  anovaSheet.getRange("A1").setValue("Statistical Analysis for RCBD with Replication")
-    .setFontWeight("bold");
+    // Create or clear ANOVA sheet
+    let anovaSheet = ss.getSheetByName(targetSheetName);
+    if (!anovaSheet) anovaSheet = ss.insertSheet(targetSheetName);
+    else anovaSheet.clear();
 
-  // Color formatting sheet title
-  setContrastColors(anovaSheet.getRange("A1:E1"), COLOR_PALETTE.header);
-  
-  let currentRow = 3;
-  
-  // Generate descriptive statistics headers
-  const headerRow = ["SUMMARY", ...treatments, "Total"];
-  anovaSheet.getRange(currentRow, 1, 1, headerRow.length)
-    .setValues([headerRow])
-    .setFontStyle("italic")
-    .setFontWeight("bold");
-  // Change current row
-  currentRow++;
+    // Get raw data and design parameters
+    const rawData = nhSheet.getRange("A2:C" + nhSheet.getLastRow()).getValues();
+    const blocks = [...new Set(rawData.map(row => row[0]))];
+    const treatments = [...new Set(rawData.map(row => row[1]))];
+    const b = blocks.length, t = treatments.length, r = rawData.filter(row => 
+        row[0] === blocks[0] && row[1] === treatments[0]).length;
 
-  // Generate block summary tables
-  blocks.forEach((block, blockIdx) => {
-    // Add block label
-    anovaSheet.getRange(currentRow, 1)
-      .setValue(block)
-      .setFontStyle("italic");
+    // Add titles
+    anovaSheet.getRange("A1").setValue("Statistical Analysis for RCBD with Replication")
+        .setFontWeight("bold");
+
+    // Color formatting sheet title
+    setContrastColors(anovaSheet.getRange("A1:E1"), COLOR_PALETTE.header);
+
+    let currentRow = 3;
+
+    // Generate descriptive statistics headers
+    const headerRow = ["SUMMARY", ...treatments, "Total"];
+    anovaSheet.getRange(currentRow, 1, 1, headerRow.length)
+        .setValues([headerRow])
+        .setFontStyle("italic")
+        .setFontWeight("bold");
+    // Change current row
     currentRow++;
 
-    const blockData = rawData.filter(row => row[0] === block);
+    // Generate block summary tables
+    blocks.forEach((block, blockIdx) => {
+        // Add block label
+        anovaSheet.getRange(currentRow, 1)
+        .setValue(block)
+        .setFontStyle("italic");
+        currentRow++;
 
-    // Calculate statistics
-    const stats = {
-      count: treatments.map(t => 
-        blockData.filter(row => row[1] === t).length),
-      sum: treatments.map(t => 
-        blockData.filter(row => row[1] === t).reduce((a, v) => a + v[2], 0)),
-      avg: treatments.map(t => {
-        const data = blockData.filter(row => row[1] === t).map(r => r[2]);
+        const blockData = rawData.filter(row => row[0] === block);
+
+        // Calculate statistics
+        const stats = {
+        count: treatments.map(t => 
+            blockData.filter(row => row[1] === t).length),
+        sum: treatments.map(t => 
+            blockData.filter(row => row[1] === t).reduce((a, v) => a + v[2], 0)),
+        avg: treatments.map(t => {
+            const data = blockData.filter(row => row[1] === t).map(r => r[2]);
+            return data.reduce((a, v) => a + v, 0) / data.length;
+        }),
+        var: treatments.map(t => {
+            const data = blockData.filter(row => row[1] === t).map(r => r[2]);
+            const mean = data.reduce((a, v) => a + v, 0) / data.length;
+            return data.reduce((a, v) => a + Math.pow(v - mean, 2), 0) / (data.length - 1);
+        })
+        };
+
+        // Add totals column
+        stats.count.push(stats.count.reduce((a, v) => a + v, 0));
+        stats.sum.push(stats.sum.reduce((a, v) => a + v, 0));
+        stats.avg.push(stats.sum[stats.sum.length-1] / stats.count[stats.count.length-1]);
+        stats.var.push(
+        blockData.reduce((sum, row) => sum + Math.pow(row[2] - stats.avg[stats.avg.length-1], 2), 0) /
+        (blockData.length - 1)
+        );
+
+        // Build table
+        const tableData = [
+        ["Count", ...stats.count],
+        ["Sum", ...stats.sum],
+        ["Average", ...stats.avg],
+        ["Variance", ...stats.var]
+        ];
+        
+        // Write data to table
+        anovaSheet.getRange(currentRow, 1, 4, tableData[0].length)
+        .setValues(tableData)
+        .setBorder(true, false, false, false, false, false, COLOR_PALETTE.thickBorder, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+        anovaSheet.getRange(currentRow + 1, 2, 3, tableData[0].length)
+        .setNumberFormat("0.00");
+        
+        currentRow += 5; // 4 data rows + 1 spacer
+    });
+
+    // Generate Total table
+    anovaSheet.getRange(currentRow, 1)
+        .setValue("Total")
+        .setFontWeight("bold")
+        .setFontStyle("italic");
+    currentRow++;
+
+    const totalStats = {
+        count: treatments.map(t => 
+        rawData.filter(row => row[1] === t).length),
+        sum: treatments.map(t => 
+        rawData.filter(row => row[1] === t).reduce((a, v) => a + v[2], 0)),
+        avg: treatments.map(t => {
+        const data = rawData.filter(row => row[1] === t).map(r => r[2]);
         return data.reduce((a, v) => a + v, 0) / data.length;
-      }),
-      var: treatments.map(t => {
-        const data = blockData.filter(row => row[1] === t).map(r => r[2]);
+        }),
+        var: treatments.map(t => {
+        const data = rawData.filter(row => row[1] === t).map(r => r[2]);
         const mean = data.reduce((a, v) => a + v, 0) / data.length;
         return data.reduce((a, v) => a + Math.pow(v - mean, 2), 0) / (data.length - 1);
-      })
+        })
     };
 
-    // Add totals column
-    stats.count.push(stats.count.reduce((a, v) => a + v, 0));
-    stats.sum.push(stats.sum.reduce((a, v) => a + v, 0));
-    stats.avg.push(stats.sum[stats.sum.length-1] / stats.count[stats.count.length-1]);
-    stats.var.push(
-      blockData.reduce((sum, row) => sum + Math.pow(row[2] - stats.avg[stats.avg.length-1], 2), 0) /
-      (blockData.length - 1)
-    );
-
-    // Build table
-    const tableData = [
-      ["Count", ...stats.count],
-      ["Sum", ...stats.sum],
-      ["Average", ...stats.avg],
-      ["Variance", ...stats.var]
+    const totalTableData = [
+        ["Count", ...totalStats.count],
+        ["Sum", ...totalStats.sum],
+        ["Average", ...totalStats.avg],
+        ["Variance", ...totalStats.var]
     ];
-    
-    // Write data to table
-    anovaSheet.getRange(currentRow, 1, 4, tableData[0].length)
-      .setValues(tableData)
-      .setBorder(true, false, false, false, false, false, COLOR_PALETTE.thickBorder, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
 
-    anovaSheet.getRange(currentRow + 1, 2, 3, tableData[0].length)
-      .setNumberFormat("0.00");
-      
-    currentRow += 5; // 4 data rows + 1 spacer
-  });
+    anovaSheet.getRange(currentRow, 1, 4, totalTableData[0].length)
+        .setValues(totalTableData)
+        .setBorder(true, false, false, false, false, false, COLOR_PALETTE.thickBorder, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
 
-  // Generate Total table
-  anovaSheet.getRange(currentRow, 1)
-    .setValue("Total")
-    .setFontWeight("bold")
-    .setFontStyle("italic");
-  currentRow++;
-  
-  const totalStats = {
-    count: treatments.map(t => 
-      rawData.filter(row => row[1] === t).length),
-    sum: treatments.map(t => 
-      rawData.filter(row => row[1] === t).reduce((a, v) => a + v[2], 0)),
-    avg: treatments.map(t => {
-      const data = rawData.filter(row => row[1] === t).map(r => r[2]);
-      return data.reduce((a, v) => a + v, 0) / data.length;
-    }),
-    var: treatments.map(t => {
-      const data = rawData.filter(row => row[1] === t).map(r => r[2]);
-      const mean = data.reduce((a, v) => a + v, 0) / data.length;
-      return data.reduce((a, v) => a + Math.pow(v - mean, 2), 0) / (data.length - 1);
-    })
-  };
+    anovaSheet.getRange(currentRow + 1, 2, 3, totalTableData[0].length)
+        .setNumberFormat("0.00");
 
-  const totalTableData = [
-    ["Count", ...totalStats.count],
-    ["Sum", ...totalStats.sum],
-    ["Average", ...totalStats.avg],
-    ["Variance", ...totalStats.var]
-  ];
-  
-  anovaSheet.getRange(currentRow, 1, 4, totalTableData[0].length)
-    .setValues(totalTableData)
-    .setBorder(true, false, false, false, false, false, COLOR_PALETTE.thickBorder, SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+    // Formatting first column
+    anovaSheet.getRange("A:A")
+        .setHorizontalAlignment("left")
+        .setWrap(false);
 
-  anovaSheet.getRange(currentRow + 1, 2, 3, totalTableData[0].length)
-    .setNumberFormat("0.00");
-  
-  // Formatting first column
-  anovaSheet.getRange("A:A")
-    .setHorizontalAlignment("left")
-    .setWrap(false);
+    // Align to center except last Total header
+    anovaSheet.getRange(1, 2, currentRow + 3, headerRow.length - 1)
+        .setHorizontalAlignment("center");
 
-  // Align to center except last Total header
-  anovaSheet.getRange(1, 2, currentRow + 3, headerRow.length - 1)
-    .setHorizontalAlignment("center");
+    // Align Total header to right
+    anovaSheet.getRange(1, headerRow.length, currentRow)
+        .setHorizontalAlignment("right");
 
-  // Align Total header to right
-  anovaSheet.getRange(1, headerRow.length, currentRow)
-    .setHorizontalAlignment("right");
-  
-  // Generate ANOVA table after spacing
-  currentRow += 8;
-  generateANOVATable(anovaSheet, currentRow, rawData, blocks, treatments, b, t, r);
+    // Generate ANOVA table after spacing
+    currentRow += 8;
+    generateANOVATable(anovaSheet, currentRow, rawData, blocks, treatments, b, t, r);
 
-  // Color formatting P-value cells
-  formatANOVATable(anovaSheet, currentRow);
+    // Color formatting P-value cells
+    formatANOVATable(anovaSheet, currentRow);
 
-  // Generate Statistical Interpretation
-  generateStatisticalInterpretation(anovaSheet, currentRow);
+    // Generate Statistical Interpretation
+    generateStatisticalInterpretation(anovaSheet, currentRow);
+
+    // Log the successful ANOVA generation
+    Browser.msgBox("Success!", "ANOVA generation completed successfully.", Browser.Buttons.OK);
+    Logger.log("ANOVA generation completed successfully.");
 }
 
 // ====================== HELPER FUNCTION FOR ANOVA TABLE ======================
