@@ -18,7 +18,8 @@ const COLOR_PALETTE = {
   significant: '#00ff00', // Green
   ns: '#ff8080',        // Red
   warning: '#ffff80',   // Yellow
-  neutral: '#95a5a6'    // Gray
+  neutral: '#95a5a6',    // Gray
+  trendLineColor: '#ec8d39', // Orange for trend lines
 };
 
 // 95% CI - Confidence level
@@ -47,9 +48,13 @@ function onOpen() {
 }
 
 /**
- * Converts wide-format data (Block, T1, T2, ..., Tn) 
- * to long format (Block, Treatment, Germination).
- * Handles dynamic blocks, treatments, and replications.
+ * Function that restructures the data from
+ * wide format to long format.
+ * This is used to prepare the data for
+ * ANOVA assumptions checks.
+ * 
+ * @customFunction
+ * @returns {void}
  */
 function restructureData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -65,8 +70,7 @@ function restructureData() {
 
   // Set headers for long format
   targetSheet.getRange("A1:C1")
-    .setValues([["Block", "Treatment", "Result"]])
-    .setFontWeight('bold');
+    .setValues([["Block", "Treatment", "Result"]]);
 
   // Get all data from source sheet
   const [header, ...data] = sourceSheet.getDataRange().getValues();
@@ -90,39 +94,58 @@ function restructureData() {
 }
 
 /**
- * Function that runs all the calculations to 
+ * Function that runs all the calculations to
  * prepare the data for ANOVA assumptions' checks.
  * 
+ * @customFunction
+ * @returns {void}
  */
 function prepareDataForChecks() {
-  computeOverallMean();
-  computeBlockMeans();
-  computeTreatmentMeans();
-  computeFittedValues();
-  computeResiduals();
-  computeSortedResiduals();
-  computePercentiles();
-  computeZScores();
-  formatAssumptionCheckSheet();
+    const ui = SpreadsheetApp.getUi();
+    const sheet = getCurrentNhSheet();
+    if (!sheet) {
+        ui.alert('Error', 'Please run "Restructure Data" first to prepare the data for checks.', ui.ButtonSet.OK);
+        Logger.log('Data preparation failed: No NH Checks sheet found.');
+        return;
+    } else {
+        try {
+            computeOverallMean(sheet);
+            computeBlockMeans(sheet);
+            computeTreatmentMeans(sheet);
+            computeFittedValues(sheet);
+            computeResiduals(sheet);
+            sortComputedResiduals(sheet);
+            computePercentiles(sheet);
+            computeZScores(sheet);
+            formatAssumptionCheckSheet(sheet);
+            // Log the successful data preparation
+            Logger.log('Data prepared successfully for checks.');
+            ui.alert('Success!', 'Data is ready for assumption checks.', ui.ButtonSet.OK);
+        } catch (error) {
+            Logger.log("Error in prepareDataForChecks: ", error);
+            ui.alert('Error', `Failed to prepare data for checks: ${error.message}. Please check the console for details.`, ui.ButtonSet.OK);
+        }
+    }
 }
 
 /**
- * Function that calculates overall 
- * mean of treatments.
+ * Function that computes and sets overall mean 
+ * of treatments.
  * 
+ * @customFunction
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the overall mean 
+ *                  is computed.
+ * @returns {Range} The range where the overall mean is set.
  */
-function computeOverallMean() {
-  const sheet = getCurrentNhSheet();
+function computeOverallMean(sheet) {
   const range = sheet.getRange("C2:C");
   const flattenedValues = range.getValues().flat().filter(v => v !== "");
   const overallSum = flattenedValues.reduce((a, b) => a + b, 0);
   const overallMean = overallSum / flattenedValues.length;
   
   sheet.getRange("L1")
-    .setValue("Overall Treatment Mean")
-    .setWrap(true)
-    .setFontWeight("bold")
-    .setBorder(false, false, true, false, false, false);
+    .setValue("Overall Treatment Mean");
   sheet.getRange("L2")
     .setValue(overallMean);
 }
@@ -130,11 +153,15 @@ function computeOverallMean() {
 /**
  * Function that calculates block means 
  * and fills them in the 'Block Means' 
- * column.
+ * column D.
  * 
+ * @customFunction
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the block means 
+ *                  are computed.
+ * @returns {Range} The range where the block means are set.
  */
-function computeBlockMeans() {
-  const sheet = getCurrentNhSheet();
+function computeBlockMeans(sheet) {
   const dataRange = sheet.getRange("A2:C" + sheet.getLastRow());
   const data = dataRange.getValues();
   
@@ -153,11 +180,15 @@ function computeBlockMeans() {
 /**
  * Function that calculates treatment means 
  * and fills them in the 'Treatment Means' 
- * column.
+ * column E.
  * 
+ * @customFunction
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the treatment means
+ *                  are computed.
+ * @returns {Range} The range where the treatment means are set.
  */
-function computeTreatmentMeans() {
-  const sheet = getCurrentNhSheet();
+function computeTreatmentMeans(sheet) {
   const dataRange = sheet.getRange("A2:C" + sheet.getLastRow());
   const data = dataRange.getValues();
   
@@ -176,11 +207,16 @@ function computeTreatmentMeans() {
 /**
  * Function that calculates fitted/predicted values 
  * and fills them in the 'Fitted Values' 
- * column.
+ * column F.
  * 
+ * @customFunction
+ * 
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the fitted values
+ *                  are computed.
+ * @returns {Range} The range where the fitted values are set.
  */
-function computeFittedValues() {
-  const sheet = getCurrentNhSheet();
+function computeFittedValues(sheet) {
   const overallMean = sheet.getRange("L2").getValue();
   const lastRow = sheet.getLastRow();
   
@@ -198,11 +234,16 @@ function computeFittedValues() {
 /**
  * Function that calculates residuals by subtructing  
  * fitted values from observed values 
- * and fills them in the 'Residuals' column.
+ * and fills them in the 'Residuals' column G.
  * 
+ * @customFunction
+ * 
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the residuals 
+ *                  are computed.
+ * @returns {Range} The range where the residuals are set.
  */
-function computeResiduals() {
-  const sheet = getCurrentNhSheet();
+function computeResiduals(sheet) {
   const lastRow = sheet.getLastRow();
   const results = sheet.getRange("C2:C" + lastRow).getValues().flat();
   const fittedValues = sheet.getRange("F2:F" + lastRow).getValues().flat();
@@ -217,11 +258,17 @@ function computeResiduals() {
 
 /**
  * Function that sorts residuals by ascending order 
- * and fills them in the 'Sorted Residuals' column.
+ * and fills them in the 'Sorted Residuals' column H.
+ * 
+ * @customFunction
+ * 
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the residuals 
+ *                 are sorted.
+ * @returns {Range} The range where the sorted residuals are set.
  * 
  */
-function computeSortedResiduals() {
-  const sheet = getCurrentNhSheet();
+function sortComputedResiduals(sheet) {
   const residuals = sheet.getRange("G2:G" + sheet.getLastRow()).getValues().flat();
   const sorted = [...residuals].sort((a, b) => a - b);
   
@@ -235,11 +282,16 @@ function computeSortedResiduals() {
  * Function that calculates percentiles which will be 
  * used for Q-Q Plotting to check normality 
  * and fills them in the 'Percentiles' 
- * column.
+ * column I.
  * 
+ * @customFunction
+ * 
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the percentiles 
+ *                 are computed.
+ * @returns {Range} The range where the percentiles are set.
  */
-function computePercentiles() {
-  const sheet = getCurrentNhSheet();
+function computePercentiles(sheet) {
   const n = sheet.getLastRow() - 1;
   const percentiles = Array.from({length: n}, (_, i) => (i + 0.5) / n);
   
@@ -252,11 +304,15 @@ function computePercentiles() {
 /**
  * A custom function that calculates Z-scores which will be 
  * used for checking normality and fills them in the 'Z-Scores' 
- * column.
+ * column J.
  * 
+ * @customFunction
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the Z-scores
+ *                  are computed.
+ * @returns {Range} The range where the Z-scores are set.
  */
-function computeZScores() {
-  const sheet = getCurrentNhSheet();
+function computeZScores(sheet) {
   const lastRow = sheet.getRange("I:I").getLastRow();
   
   // Get percentile values from I2 to last row
@@ -281,97 +337,144 @@ function computeZScores() {
 }
 
 // New formatting function
-function formatAssumptionCheckSheet() {
-  const sheet = getCurrentNhSheet();
-  sheet.getRange("A1:J1")
-    .setFontWeight("bold")
-    .setWrap(true)
-    .setBorder(false, false, true, false, false, false);
-  sheet.getDataRange().setHorizontalAlignment('center');
+/**
+ * 
+ * @param {Sheet}   sheet The Google Sheets Sheet object to format.
+ */
+function formatAssumptionCheckSheet(sheet) {
+    const lastRow = sheet.getLastRow();
+    sheet.getRange("A1:J1")
+        .setFontWeight("bold")
+        .setBorder(false, false, true, false, false, false);
+    sheet.getRange("D1:J1").setWrap(true);
+    // Formats to 4 decimals starting from fitted values
+    sheet.getRange(`F2:J${lastRow}`).setNumberFormat("0.0000");
+
+    // formatting the Overall Treatment Mean
+    sheet.getRange("L1")
+        .setWrap(true)
+        .setFontWeight("bold")
+        .setBorder(false, false, true, false, false, false);
+    sheet.getRange("L2")
+        .setNumberFormat("0.0000");
+
+    // Center align all columns
+    sheet.getDataRange().setHorizontalAlignment('center');
 }
 
 // ====================== CHART CREATION FUNCTIONS ======================
 /**
  * Function that runs the functions to 
  * create Q-Q Plot and Scatter Chart which is 
- * used for testing Homogeneity.
+ * used for testing Homogeneity. 
+ * 
+ * @customFunction
  * 
  */
 function createCharts() {
-  createQQPlot();
-  createResidualsVsFitted();
+    const ui = SpreadsheetApp.getUi();
+    const sheet = getCurrentNhSheet();
+    if (!sheet) {
+        Logger.log('Chart creation failed: No NH Checks sheet found.');
+        ui.alert('Error', 'Please run "Restructure Data" first to prepare the data for checks.', ui.ButtonSet.OK);
+        return;
+    } else {
+        createQQPlot(sheet);
+        createResidualsVsFitted(sheet);
+        // Log the successful chart creation
+        Logger.log('Charts created successfully.');
+        // Show success message
+        ui.alert('Success!', 'Q-Q Plot and Residuals vs Fitted Values chart created.', ui.ButtonSet.OK);
+    }
 }
 
 /**
  * Function to create Q-Q Plot for 
  * testing normality.
  * 
+ * @customFunction
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the Q-Q plot is created.
+ * @returns {void}
  */
-function createQQPlot() {
-  const sheet = getCurrentNhSheet();
-  const lastRow = sheet.getLastRow();
+function createQQPlot(sheet) {
+    const lastRow = sheet.getLastRow();
 
-  // Get data ranges for Q-Q plot
-  const zScoresRange = sheet.getRange("J2:J" + lastRow);
-  const sortedResidualsRange = sheet.getRange("H2:H" + lastRow);
+    // Get data ranges for Q-Q plot
+    const zScoresRange = sheet.getRange("J2:J" + lastRow);
+    const sortedResidualsRange = sheet.getRange("H2:H" + lastRow);
 
-  // Build and position Q-Q plot
-  const qqChart = sheet.newChart()
-    .asScatterChart()
-    .addRange(zScoresRange)
-    .addRange(sortedResidualsRange)
-    .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
-    .setTransposeRowsAndColumns(false)
-    .setNumHeaders(0)
-    .setTitle('Q-Q Plot of Residuals')
-    .setXAxisTitle('Theoretical Quantiles (Z-Scores)')
-    .setYAxisTitle('Sample Quantiles (Sorted Residuals)')
-    .setPosition(6, 12, 0, 0) // Row 7, Column M
-    .setOption('series.0.dataLabel', 'none')
-    .setOption('legend.position', 'none')
-    .setOption('hAxis.gridlines.count', 5)
-    .setOption('vAxis.gridlines.count', 5)
-    .build();
+    // Build and position Q-Q plot
+    const qqChart = sheet.newChart()
+        .asScatterChart()
+        .addRange(zScoresRange)
+        .addRange(sortedResidualsRange)
+        .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
+        .setTransposeRowsAndColumns(false)
+        .setNumHeaders(0)
+        .setTitle('Q-Q Plot of Residuals')
+        .setXAxisTitle('Theoretical Quantiles (Z-Scores)')
+        .setYAxisTitle('Sample Quantiles (Sorted Residuals)')
+        .setPosition(6, 12, 0, 0) // Row 7, Column M
+        .setOption('series.0.dataLabel', 'none')
+        .setOption('series.0.pointStyle', 'circle')
+        .setOption('series.0.pointSize', 2)
+        .setOption('legend.position', 'none')
+        .setOption('hAxis.gridlines.count', 5)
+        .setOption('vAxis.gridlines.count', 5)
+        .setOption('trendlines', { 0: { 
+            type: 'linear',
+            color: COLOR_PALETTE.trendLineColor,
+            lineWidth: 1,
+            opacity: 0.6 
+        }})
+        .build();
 
-  sheet.insertChart(qqChart);
+    sheet.insertChart(qqChart);
 }
 
 /**
  * Function to create Scatter Chart which is 
  * used for testing Homogeneity.
  * 
+ * @customFunction
+ * @param {Sheet}   sheet The Google Sheets Sheet 
+ *                  object where the chart is created.
+ * @returns {void}
+ * 
  */
-function createResidualsVsFitted() {
-  const sheet = getCurrentNhSheet();
-  const lastRow = sheet.getLastRow();
+function createResidualsVsFitted(sheet) {
+    const lastRow = sheet.getLastRow();
 
-  // Get data ranges for Residuals plot
-  const fittedRange = sheet.getRange("F2:F" + lastRow);
-  const residualsRange = sheet.getRange("G2:G" + lastRow);
+    // Get data ranges for Residuals plot
+    const fittedRange = sheet.getRange("F2:F" + lastRow);
+    const residualsRange = sheet.getRange("G2:G" + lastRow);
 
-  // Build and position Residuals plot
-  const resChart = sheet.newChart()
-    .asScatterChart()
-    .addRange(fittedRange)
-    .addRange(residualsRange)
-    .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
-    .setTransposeRowsAndColumns(false)
-    .setNumHeaders(0)
-    .setTitle('Residuals vs Fitted Values')
-    .setXAxisTitle('Fitted Values')
-    .setYAxisTitle('Residuals')
-    .setPosition(26, 12, 0, 0) // Row 27, Column M
-    .setOption('trendlines', { 0: { 
-      type: 'linear',
-      color: 'red',
-      lineWidth: 1,
-      opacity: 0.5 
-    }})
-    .setOption('series.0.dataLabel', 'none')
-    .setOption('legend.position', 'none')
-    .build();
+    // Build and position Residuals plot
+    const resChart = sheet.newChart()
+        .asScatterChart()
+        .addRange(fittedRange)
+        .addRange(residualsRange)
+        .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
+        .setTransposeRowsAndColumns(false)
+        .setNumHeaders(0)
+        .setTitle('Residuals vs Fitted Values')
+        .setXAxisTitle('Fitted Values')
+        .setYAxisTitle('Residuals')
+        .setPosition(26, 12, 0, 0) // Row 27, Column M
+        .setOption('trendlines', { 0: { 
+            type: 'linear',
+            color: COLOR_PALETTE.trendLineColor,
+            lineWidth: 1,
+            opacity: 0.6 
+        }})
+        .setOption('series.0.dataLabel', 'none')
+        .setOption('series.0.pointStyle', 'circle')
+        .setOption('series.0.pointSize', 2)
+        .setOption('legend.position', 'none')
+        .build();
 
-  sheet.insertChart(resChart);
+    sheet.insertChart(resChart);
 }
 
 // ====================== TWO-FACTOR ANOVA GENERATION ======================
@@ -541,6 +644,8 @@ function generateANOVA() {
 /**
  * Generates the Two-Factor ANOVA table.
  * 
+ * @customFunction
+ * 
  * @param {Sheet} sheet The Google Sheets Sheet object where the ANOVA table is generated.
  * @param {Number} startRow Row number where the ANOVA table starts.
  * @param {Object} rawData Observations raw data.
@@ -549,7 +654,6 @@ function generateANOVA() {
  * @param {Number} b Number of blocks.
  * @param {Number} t Number of treatments.
  * @param {Number} r Number of treatment replications per block.
- * @customFunction
  */
 function generateANOVATable(sheet, startRow, rawData, blocks, treatments, b, t, r) {
   const { ssBlocks, ssTreatments, ssInteraction, ssError, ssTotal } = 
@@ -867,6 +971,17 @@ function testStatisticalSignificances(sheet, pvalStartRow, startRow) {
     .setFontStyle("italic");
 }
 
+/**
+ * Generates the result interpretation section
+ * after the ANOVA results.
+ * 
+ * @customFunction
+ * @param {Sheet} sheet The Google Sheets Sheet object
+ *                      containing the ANOVA table 
+ *                     where the result interpretation will be created.
+ * @param {Number} statSigStartRow Row number where the statistical significance test starts.
+ * @param {Number} startRow Row number where the result interpretation starts.
+ */
 function generateResultInterpretation(sheet, statSigStartRow, startRow) {
   // Add 'Result Interpretation' title
   sheet.getRange(startRow, 1).setValue("Result Interpretation");
@@ -1014,7 +1129,17 @@ function addResultInterpretationNotes(sheet, blkEffectLabelA1, trtEffectLabelA1)
 }
 
 // ====================== EFFECT SIZE CI CALCULATIONS ======================
-
+/**
+ * Function to calculate confidence intervals for η² and ω² effect sizes
+ * based on the F-statistic and degrees of freedom.
+ * 
+ * @param {Sheet} sheet The Google Sheets Sheet object where the calculations are performed.
+ * @param {Number} F The F-statistic value.
+ * @param {*} df1 Degrees of freedom for the numerator (blocks or treatments). 
+ * @param {*} df2 Degrees of freedom for the denominator (error).
+ * @returns {Object} An object containing the confidence intervals for η² and ω².
+ * @customFunction
+ */
 function calculateEffectSizeCI(sheet, F, df1, df2) {
   const tempCell = sheet.getRange("ZZ1"); // Use an unlikely-to-be-used cell
 
@@ -1045,6 +1170,16 @@ function calculateEffectSizeCI(sheet, F, df1, df2) {
 }
 
 // ====================== COLOR CONTRAST UTILITIES ======================
+/**
+ * Helper function to set background and font color
+ * for a given range in Google Sheets, ensuring 
+ * good contrast between background and font color.
+ * 
+ * @param {Range} range The Google Sheets Range object to set background and font color.
+ * @param {String} hexColor The hex color code to set as background.
+ * @returns {void}
+ * @customFunction
+ */
 function setContrastColors(range, hexColor) {
   const fontColor = getContrastFontColor(hexColor);
   range
@@ -1052,6 +1187,16 @@ function setContrastColors(range, hexColor) {
     .setFontColor(fontColor);
 }
 
+/**
+ * Returns a contrasting font color (either dark or light) 
+ * based on the luminance of the provided hex color.
+ * @param {String} hexColor Hex color code to determine 
+ *                          the contrast font color.
+ *                          Should be in the format 
+ *                          "#RRGGBB" or "#RGB".
+ * @returns {String} The contrasting font color in hex format.
+ * @customFunction
+ */
 function getContrastFontColor(hexColor) {
   // Convert hex to RGB
   let hex = hexColor.replace('#', '');
@@ -1091,9 +1236,9 @@ function getCurrentNhSheet() {
  * Returns raw data sheet name that contains 
  * treatment data before analysis.
  * 
- * @param {Sheet} currentSheet    The Google Sheets Sheet object where 
- *                                user is currently at.
- * @param {String}                Name of sheet with raw data, used for analysis.
+ * @param {Sheet} currentSheet  The Google Sheets Sheet 
+ *                              object where user is currently at.
+ * @returns {String} Name of sheet with raw data, used for analysis.
  */
 function getRawDataSheetNameFromCurrent(currentSheet) {
   const currentSheetName = currentSheet.getName();
